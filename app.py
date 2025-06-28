@@ -25,7 +25,13 @@ def home():
 @app.route('/trending', methods=['GET'])
 def get_trending():
     geo = request.args.get('geo', default='US').upper()
-    region = valid_regions.get(geo, 'united_states')  # fallback to US if invalid
+
+    if geo not in valid_regions:
+        return jsonify({
+            "error": f"Region '{geo}' is not supported. Choose from: {list(valid_regions.keys())}"
+        }), 400
+
+    region = valid_regions[geo]
 
     try:
         trending_searches = pytrends.trending_searches(pn=region)

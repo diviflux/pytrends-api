@@ -5,7 +5,7 @@ import os
 app = Flask(__name__)
 pytrends = TrendReq(hl='en-US', tz=360)
 
-# Mapping ISO country codes to pytrends supported region slugs
+# ISO to pytrends region map
 valid_regions = {
     'US': 'united_states',
     'IN': 'india',
@@ -25,22 +25,11 @@ def home():
 @app.route('/trending', methods=['GET'])
 def get_trending():
     geo = request.args.get('geo', default='US').upper()
-
-    if geo not in valid_regions:
-        return jsonify({
-            "error": f"Region '{geo}' is not supported. Choose from: {list(valid_regions.keys())}"
-        }), 400
-
-    region = valid_regions[geo]
-
+    region = valid_regions.get(geo, 'united_states')
     try:
-        trending_searches = pytrends.trending_searches(pn=region)
-        keywords = trending_searches[0].tolist()
-        return jsonify({
-            "geo": geo,
-            "region": region,
-            "trending_keywords": keywords
-        })
+        df = pytrends.trending_searches(pn=region)
+        keywords = df[0].tolist()
+        return jsonify({"geo": geo, "region": region, "trending_keywords": keywords})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

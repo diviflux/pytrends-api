@@ -1,0 +1,311 @@
+{
+  "name": "Lead Generation from Trending Keywords",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 24
+            }
+          ]
+        }
+      },
+      "id": "f7bde058-6d06-4ef6-8af2-3f4cc119cb6f",
+      "name": "Daily Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "keepOnlySet": true,
+        "values": {
+          "string": [
+            {
+              "name": "baseUrl",
+              "value": "https://your-pytrends-api.onrender.com"
+            },
+            {
+              "name": "geo",
+              "value": "US"
+            },
+            {
+              "name": "targetCountry",
+              "value": "us"
+            },
+            {
+              "name": "serperApiKey",
+              "value": "={{$env.SERPER_API_KEY}}"
+            },
+            {
+              "name": "hunterApiKey",
+              "value": "={{$env.HUNTER_API_KEY}}"
+            },
+            {
+              "name": "crmWebhookUrl",
+              "value": "={{$env.CRM_WEBHOOK_URL}}"
+            }
+          ],
+          "number": [
+            {
+              "name": "maxKeywords",
+              "value": 10
+            },
+            {
+              "name": "serperResultCount",
+              "value": 5
+            },
+            {
+              "name": "hunterLimit",
+              "value": 3
+            }
+          ]
+        }
+      },
+      "id": "f5f8ebec-dd58-411d-867f-dc8e6a78ec74",
+      "name": "Workflow Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [
+        440,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{$json.baseUrl + '/trending'}}",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "geo",
+              "value": "={{$json.geo}}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "73abf0fd-4968-4d9e-b76f-5f26fa64fca9",
+      "name": "Fetch Trending Keywords",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = $('Workflow Config').first().json;\nconst keywords = ($json.trending_keywords || []).slice(0, cfg.maxKeywords || 10);\nreturn keywords.map((keyword) => ({\n  json: {\n    keyword,\n    targetCountry: cfg.targetCountry,\n    serperApiKey: cfg.serperApiKey,\n    hunterApiKey: cfg.hunterApiKey,\n    crmWebhookUrl: cfg.crmWebhookUrl,\n    serperResultCount: cfg.serperResultCount || 5,\n    hunterLimit: cfg.hunterLimit || 3\n  }\n}));"
+      },
+      "id": "c60ec0bc-324d-43cb-a0bf-f3e2700ed7d0",
+      "name": "Expand Keywords",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const payload = {\n  q: `${$json.keyword} B2B SaaS company`,\n  gl: $json.targetCountry || 'us',\n  num: $json.serperResultCount || 5\n};\n\nconst response = await fetch('https://google.serper.dev/search', {\n  method: 'POST',\n  headers: {\n    'X-API-KEY': $json.serperApiKey,\n    'Content-Type': 'application/json'\n  },\n  body: JSON.stringify(payload)\n});\n\nif (!response.ok) {\n  throw new Error(`Serper API error: ${response.status} ${response.statusText}`);\n}\n\nconst data = await response.json();\nreturn [{ json: { ...$json, serper: data } }];"
+      },
+      "id": "4bcf2d31-2828-4f62-8f26-9ca6a7221f95",
+      "name": "Search Companies",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1140,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const allItems = $input.all();\nconst seenDomains = new Set();\nconst leads = [];\n\nfor (const item of allItems) {\n  const organic = item.json.serper?.organic || [];\n  for (const result of organic) {\n    const link = result.link || '';\n    if (!link.startsWith('http')) continue;\n\n    let domain = '';\n    try {\n      domain = new URL(link).hostname.replace(/^www\\./, '');\n    } catch {\n      continue;\n    }\n\n    if (!domain || seenDomains.has(domain)) continue;\n    seenDomains.add(domain);\n\n    leads.push({\n      json: {\n        keyword: item.json.keyword,\n        domain,\n        sourceUrl: link,\n        pageTitle: result.title || '',\n        snippet: result.snippet || '',\n        hunterApiKey: item.json.hunterApiKey,\n        crmWebhookUrl: item.json.crmWebhookUrl,\n        hunterLimit: item.json.hunterLimit || 3\n      }\n    });\n  }\n}\n\nreturn leads;"
+      },
+      "id": "0478f457-6dc3-4fae-95d8-c23e9af13d29",
+      "name": "Extract Unique Domains",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1380,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const url = new URL('https://api.hunter.io/v2/domain-search');\nurl.searchParams.set('domain', $json.domain);\nurl.searchParams.set('limit', String($json.hunterLimit || 3));\nurl.searchParams.set('api_key', $json.hunterApiKey);\n\nconst response = await fetch(url.toString());\nif (!response.ok) {\n  throw new Error(`Hunter API error: ${response.status} ${response.statusText}`);\n}\n\nconst data = await response.json();\nconst emails = data?.data?.emails || [];\nconst firstEmail = emails[0] || null;\n\nreturn [{\n  json: {\n    ...$json,\n    confidence: firstEmail?.confidence || 0,\n    firstName: firstEmail?.first_name || '',\n    lastName: firstEmail?.last_name || '',\n    email: firstEmail?.value || '',\n    position: firstEmail?.position || '',\n    linkedin: firstEmail?.linkedin || ''\n  }\n}];"
+      },
+      "id": "e0d9bc79-2a8b-4203-a87e-ceecf8565c7b",
+      "name": "Enrich With Hunter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1620,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "bf38a5df-8f35-4b2a-8100-1f59522f8c09",
+              "leftValue": "={{$json.email}}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "9b4aa58d-837b-490f-a6f2-601f8fd066ac",
+      "name": "Has Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1860,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$json.crmWebhookUrl}}",
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={\n  \"keyword\": \"{{$json.keyword}}\",\n  \"domain\": \"{{$json.domain}}\",\n  \"email\": \"{{$json.email}}\",\n  \"firstName\": \"{{$json.firstName}}\",\n  \"lastName\": \"{{$json.lastName}}\",\n  \"position\": \"{{$json.position}}\",\n  \"linkedin\": \"{{$json.linkedin}}\",\n  \"confidence\": {{$json.confidence}},\n  \"sourceUrl\": \"{{$json.sourceUrl}}\",\n  \"pageTitle\": \"{{$json.pageTitle}}\",\n  \"snippet\": \"{{$json.snippet}}\",\n  \"capturedAt\": \"{{$now}}\"\n}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "d2d970eb-77d6-4737-a556-f4a3f3d8ad7f",
+      "name": "Send Lead to CRM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2100,
+        200
+      ]
+    }
+  ],
+  "connections": {
+    "Daily Trigger": {
+      "main": [
+        [
+          {
+            "node": "Workflow Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Workflow Config": {
+      "main": [
+        [
+          {
+            "node": "Fetch Trending Keywords",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Trending Keywords": {
+      "main": [
+        [
+          {
+            "node": "Expand Keywords",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Expand Keywords": {
+      "main": [
+        [
+          {
+            "node": "Search Companies",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Companies": {
+      "main": [
+        [
+          {
+            "node": "Extract Unique Domains",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Unique Domains": {
+      "main": [
+        [
+          {
+            "node": "Enrich With Hunter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enrich With Hunter": {
+      "main": [
+        [
+          {
+            "node": "Has Email?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Email?": {
+      "main": [
+        [
+          {
+            "node": "Send Lead to CRM",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "d617d84d-153f-4e8d-a0e9-4fb8ff6ed68d",
+  "meta": {
+    "instanceId": "lead-gen-template"
+  },
+  "pinData": {}
+}
